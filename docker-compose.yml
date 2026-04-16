@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: triggerx-postgres
+    environment:
+      POSTGRES_DB: triggerx
+      POSTGRES_USER: triggerx
+      POSTGRES_PASSWORD: triggerx
+    ports:
+      - "5432:5432"
+    volumes:
+      - triggerx_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  triggerx_postgres_data:

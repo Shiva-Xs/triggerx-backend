@@ -1,0 +1,20 @@
+# ── Build output ──────────────────────────────────────────────────────────────
+target/
+*.class
+*.jar
+*.war
+
+# ── Local secrets — NEVER commit these ───────────────────────────────────────
+application-local.properties
+.env
+.env.*
+*.env
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+*.DS_Store
+
+# ── Maven wrapper ─────────────────────────────────────────────────────────────
+.mvn/timing.properties
