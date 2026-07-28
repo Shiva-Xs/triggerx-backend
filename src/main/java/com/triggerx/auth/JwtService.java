@@ -18,6 +18,8 @@ public class JwtService {
 
     public record TokenResult(String token, ZonedDateTime expiresAt) {}
 
+    public record VerifiedToken(UUID userId, int tokenVersion) {}
+
     private final SecretKey signingKey;
     private final long expirySeconds;
 
@@ -38,13 +40,13 @@ public class JwtService {
         this.expirySeconds = expirySeconds;
     }
 
-    public TokenResult generateToken(UUID userId, String email) {
+    public TokenResult generateToken(UUID userId, int tokenVersion) {
         Date now    = new Date();
         Date expiry = new Date(now.getTime() + expirySeconds * 1000L);
 
         String token = Jwts.builder()
                 .subject(userId.toString())
-                .claim("email", email)
+                .claim("tv", tokenVersion)
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(signingKey)
@@ -54,8 +56,13 @@ public class JwtService {
         return new TokenResult(token, expiresAt);
     }
 
-    public UUID extractUserId(String token) {
-        return UUID.fromString(parseClaims(token).getSubject());
+    public VerifiedToken verify(String token) {
+        Claims claims = parseClaims(token);
+        UUID userId = UUID.fromString(claims.getSubject());
+        Integer tv = claims.get("tv", Integer.class);
+        // Tokens issued before token versioning existed carry no "tv" claim.
+        // Treat them as version 0 so they validate against a fresh user row.
+        return new VerifiedToken(userId, tv == null ? 0 : tv);
     }
 
     private Claims parseClaims(String token) {

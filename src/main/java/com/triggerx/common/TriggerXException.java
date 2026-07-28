@@ -60,8 +60,7 @@ public class TriggerXException extends RuntimeException {
 
     public static TriggerXException unsupportedSymbol(String symbol) {
         return new TriggerXException("UNSUPPORTED_SYMBOL",
-                "Symbol '" + symbol.toUpperCase() + "' is not supported. "
-                        + "Use GET /api/v1/symbols/search to find valid symbols.",
+                "'" + symbol.toUpperCase() + "' is not a supported trading pair.",
                 HttpStatus.BAD_REQUEST);
     }
 
@@ -101,7 +100,7 @@ public class TriggerXException extends RuntimeException {
 
     public static TriggerXException aiNotConfigured() {
         return new TriggerXException("AI_NOT_CONFIGURED",
-                "Natural language alerts require GROQ_API_KEY. Set it and restart the app.",
+                "AI mode is not available right now.",
                 HttpStatus.SERVICE_UNAVAILABLE);
     }
 

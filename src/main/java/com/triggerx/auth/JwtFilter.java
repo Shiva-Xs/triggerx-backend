@@ -1,6 +1,7 @@
 package com.triggerx.auth;
 
 import com.triggerx.config.PublicPaths;
+import com.triggerx.user.UserRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -16,7 +17,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.UUID;
 
 @Slf4j
 @Component
@@ -26,6 +26,7 @@ public class JwtFilter extends OncePerRequestFilter {
     private static final AntPathMatcher ANT = new AntPathMatcher();
 
     private final JwtService jwtService;
+    private final UserRepository userRepository;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -38,9 +39,14 @@ public class JwtFilter extends OncePerRequestFilter {
             String token = header.substring(7);
 
             try {
-                UUID userId = jwtService.extractUserId(token);
-                SecurityContextHolder.getContext().setAuthentication(
-                        new UsernamePasswordAuthenticationToken(userId, null, List.of()));
+                JwtService.VerifiedToken verified = jwtService.verify(token);
+                // A token is only accepted if its "tv" claim still matches the
+                // user's current token_version. logout-all bumps that column,
+                // which instantly invalidates every previously issued token.
+                userRepository.findById(verified.userId())
+                        .filter(user -> user.getTokenVersion() == verified.tokenVersion())
+                        .ifPresent(user -> SecurityContextHolder.getContext().setAuthentication(
+                                new UsernamePasswordAuthenticationToken(user.getId(), null, List.of())));
             } catch (JwtException | IllegalArgumentException e) {
                 log.debug("Invalid JWT from {}: {}", request.getRemoteAddr(), e.getMessage());
             }

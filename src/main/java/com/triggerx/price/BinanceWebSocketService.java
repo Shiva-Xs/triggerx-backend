@@ -21,9 +21,12 @@ import org.springframework.transaction.event.TransactionPhase;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -62,6 +65,8 @@ public class BinanceWebSocketService {
     private volatile boolean refreshPending = false;
     private volatile LocalDateTime lastPriceReceived;
     private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
+    private final Set<String> subscribedStreams = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger subscribeIdSeq = new AtomicInteger(0);
 
     public BinanceWebSocketService(AlertRepository alertRepository,
                                    ApplicationEventPublisher eventPublisher,
@@ -88,27 +93,69 @@ public class BinanceWebSocketService {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onAlertChanged(AlertChangedEvent event) {
+        rebuildCache();
         if (event.reconnectRequired()) {
-            log.info("Alert changed (post-commit) — refreshing subscriptions and cache");
-            refreshSubscriptions();
+            log.info("Alert changed (post-commit) — syncing stream subscriptions");
+            syncSubscriptions();
         } else {
-            log.info("Alert changed (post-commit) — symbol set unchanged, rebuilding cache only");
-            rebuildCache();
+            log.info("Alert changed (post-commit) — symbol set unchanged, cache rebuilt");
         }
     }
 
-    public void refreshSubscriptions() {
+    private void syncSubscriptions() {
         if (!running) return;
-        log.info("Refreshing Binance WebSocket subscriptions");
-        rebuildCache();
-        refreshPending = true;
+        List<String> activeSymbols = alertRepository.findDistinctSymbolsByStatus(AlertStatus.ACTIVE);
+        Set<String> desired = activeSymbols.stream()
+                .filter(symbolRegistry::isSupported)
+                .map(ticker -> symbolRegistry.toStream(ticker) + "@miniTicker")
+                .collect(Collectors.toSet());
+
+        Set<String> toSubscribe = new HashSet<>(desired);
+        toSubscribe.removeAll(subscribedStreams);
+
+        Set<String> toUnsubscribe = new HashSet<>(subscribedStreams);
+        toUnsubscribe.removeAll(desired);
+
         WebSocketClient c = wsClient;
-        if (c != null && c.isOpen()) c.close();
-        reconnectAttempts.set(0);
-        scheduler.schedule(() -> {
-            refreshPending = false;
+        boolean open = c != null && c.isOpen();
+
+        if (open) {
+            if (!toSubscribe.isEmpty())   sendSubscribe(c, toSubscribe);
+            if (!toUnsubscribe.isEmpty()) sendUnsubscribe(c, toUnsubscribe);
+            subscribedStreams.addAll(toSubscribe);
+            subscribedStreams.removeAll(toUnsubscribe);
+            if (subscribedStreams.isEmpty()) {
+                log.info("No active streams remaining — closing WebSocket");
+                refreshPending = true;
+                wsStatus = WsStatus.IDLE;
+                c.close();
+            }
+        } else if (!desired.isEmpty()) {
+            log.info("WebSocket not open — triggering connect for new streams");
             connect();
-        }, 500, TimeUnit.MILLISECONDS);
+        } else {
+            wsStatus = WsStatus.IDLE;
+        }
+    }
+
+    private void sendSubscribe(WebSocketClient c, Set<String> streams) {
+        try {
+            String params = streams.stream().map(s -> "\"" + s + "\"").collect(Collectors.joining(","));
+            c.send("{\"method\":\"SUBSCRIBE\",\"params\":[" + params + "],\"id\":" + subscribeIdSeq.incrementAndGet() + "}");
+            log.info("SUBSCRIBE sent for {} stream(s): {}", streams.size(), streams);
+        } catch (Exception e) {
+            log.error("Failed to send SUBSCRIBE: {}", e.getMessage());
+        }
+    }
+
+    private void sendUnsubscribe(WebSocketClient c, Set<String> streams) {
+        try {
+            String params = streams.stream().map(s -> "\"" + s + "\"").collect(Collectors.joining(","));
+            c.send("{\"method\":\"UNSUBSCRIBE\",\"params\":[" + params + "],\"id\":" + subscribeIdSeq.incrementAndGet() + "}");
+            log.info("UNSUBSCRIBE sent for {} stream(s): {}", streams.size(), streams);
+        } catch (Exception e) {
+            log.error("Failed to send UNSUBSCRIBE: {}", e.getMessage());
+        }
     }
 
     public LocalDateTime getLastPriceReceived() { return lastPriceReceived; }
@@ -119,10 +166,9 @@ public class BinanceWebSocketService {
         if (!running) return;
 
         // Close any previously open connection before creating a new one.
-        // Without this, rapid back-to-back refreshSubscriptions() calls (e.g. two users
-        // creating alerts within 500ms) each schedule a connect(). The second connect()
-        // would overwrite wsClient, leaving the first connection orphaned — still
-        // receiving messages and holding a thread, but no longer reachable for cleanup.
+        // Without this, two concurrent connect() callers (e.g. scheduled reconnect racing
+        // with syncSubscriptions()) could each overwrite wsClient, leaving the first
+        // connection orphaned — still receiving messages but no longer reachable for cleanup.
         WebSocketClient prev = wsClient;
         if (prev != null && !prev.isClosed()) {
             try { prev.closeBlocking(); } catch (InterruptedException ie) {
@@ -151,7 +197,12 @@ public class BinanceWebSocketService {
 
             wsClient = new WebSocketClient(URI.create(url)) {
                 @Override public void onOpen(ServerHandshake h) {
-                    reconnectAttempts.set(0); wsStatus = WsStatus.CONNECTED; rebuildCache();
+                    reconnectAttempts.set(0);
+                    wsStatus = WsStatus.CONNECTED;
+                    refreshPending = false;
+                    subscribedStreams.clear();
+                    subscribedStreams.addAll(streams);
+                    rebuildCache();
                     log.info("Binance WebSocket connected — watching {} symbol(s)", streams.size());
                 }
                 @Override public void onMessage(String message) { handleMessage(message); }

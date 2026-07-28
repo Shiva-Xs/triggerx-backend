@@ -9,8 +9,6 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
-import java.util.stream.Collectors;
-
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -32,26 +30,22 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse> handleValidation(MethodArgumentNotValidException ex) {
-        String message = ex.getBindingResult().getFieldErrors().stream()
-                .map(e -> e.getField() + ": " + e.getDefaultMessage())
-                .collect(Collectors.joining(", "));
         return ResponseEntity.badRequest()
-                .body(new ApiResponse("INVALID_REQUEST", message, null));
+                .body(new ApiResponse("INVALID_REQUEST", "Invalid request. Please check your inputs.", null));
     }
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ApiResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
-        String val = ex.getValue() != null ? ex.getValue().toString() : "<empty>";
         return ResponseEntity.badRequest()
                 .body(new ApiResponse("INVALID_REQUEST",
-                        ex.getName() + ": invalid value '" + val + "'", null));
+                        "One or more fields have invalid values.", null));
     }
 
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public ResponseEntity<ApiResponse> handleMissingParam(MissingServletRequestParameterException ex) {
         return ResponseEntity.badRequest()
                 .body(new ApiResponse("INVALID_REQUEST",
-                        ex.getParameterName() + " is required", null));
+                        "A required field is missing.", null));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

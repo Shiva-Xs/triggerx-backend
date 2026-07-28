@@ -48,7 +48,7 @@ public class ExtensionAuthService {
             return Optional.empty();
         }
         return userRepository.findById(exchange.userId()).map(user -> {
-            JwtService.TokenResult tokenResult = jwtService.generateToken(user.getId(), user.getEmail());
+            JwtService.TokenResult tokenResult = jwtService.generateToken(user.getId(), user.getTokenVersion());
             log.info("Extension exchange token redeemed for userId={}", user.getId());
             return new OtpVerifyResponse(user.getId(), user.getEmail(), tokenResult.token(), tokenResult.expiresAt());
         });

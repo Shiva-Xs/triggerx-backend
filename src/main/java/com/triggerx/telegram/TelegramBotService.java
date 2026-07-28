@@ -14,8 +14,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.telegram.telegrambots.bots.TelegramLongPollingBot;
-import org.telegram.telegrambots.meta.TelegramBotsApi;
+import org.telegram.telegrambots.bots.TelegramWebhookBot;
+import org.telegram.telegrambots.meta.api.methods.BotApiMethod;
+import org.telegram.telegrambots.meta.api.methods.updates.SetWebhook;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.send.SendChatAction;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
@@ -24,7 +25,6 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
-import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -41,7 +41,7 @@ import static com.triggerx.telegram.TelegramUtils.escapeMd;
 @Slf4j
 @Service
 @ConditionalOnProperty(name = "telegram.bot.enabled", havingValue = "true")
-public class TelegramBotService extends TelegramLongPollingBot {
+public class TelegramBotService extends TelegramWebhookBot {
 
     private final TelegramUserRepository   telegramUserRepo;
     private final UserRepository           userRepository;
@@ -62,6 +62,16 @@ public class TelegramBotService extends TelegramLongPollingBot {
     private final Map<Long, Instant>  pendingUnlink        = new ConcurrentHashMap<>();
 
     private final String botUsername;
+
+    @Value("${telegram.webhook.url:}")
+    private String webhookUrl;
+
+    @Value("${telegram.webhook.secret:}")
+    private String webhookSecret;
+
+    public String getWebhookSecret() {
+        return webhookSecret;
+    }
 
     private static final String HELP_TEXT = """
             📋 *Commands*
@@ -98,28 +108,39 @@ public class TelegramBotService extends TelegramLongPollingBot {
     @PostConstruct
     public void registerBot() {
         try {
-            new TelegramBotsApi(DefaultBotSession.class).registerBot(this);
-            log.info("Telegram bot '{}' registered successfully", botUsername);
+            SetWebhook.SetWebhookBuilder webhook = SetWebhook.builder().url(webhookUrl + getBotPath());
+            if (webhookSecret != null && !webhookSecret.isBlank()) {
+                webhook.secretToken(webhookSecret);
+            } else {
+                log.warn("telegram.webhook.secret is not set — incoming webhook calls will not be authenticated");
+            }
+            execute(webhook.build());
+            log.info("Telegram webhook registered for bot '{}' at {}{}", botUsername, webhookUrl, getBotPath());
         } catch (TelegramApiException e) {
-            log.error("Failed to register Telegram bot '{}': {}", botUsername, e.getMessage(), e);
+            log.error("Failed to register Telegram webhook '{}': {}", botUsername, e.getMessage(), e);
         }
+    }
+
+    @Override
+    public String getBotPath() {
+        return "/api/telegram/webhook";
     }
 
     @Override
     public String getBotUsername() { return botUsername; }
 
     @Override
-    public void onUpdateReceived(Update update) {
+    public BotApiMethod<?> onWebhookUpdateReceived(Update update) {
         try {
-            if (update.hasCallbackQuery()) { handleCallback(update.getCallbackQuery()); return; }
-            if (!update.hasMessage()) return;
+            if (update.hasCallbackQuery()) { handleCallback(update.getCallbackQuery()); return null; }
+            if (!update.hasMessage()) return null;
             var message = update.getMessage();
             if (!message.hasText()) {
                 long chatId = message.getChatId();
                 if (message.hasPhoto() || message.hasDocument() || message.hasVideo() || message.hasAudio() || message.hasVoice() || message.hasSticker()) {
                     send(chatId, "❌ Please send text only\\. Try: *BTC above 80000*");
                 }
-                return;
+                return null;
             }
             long chatId = message.getChatId();
             String text = message.getText().trim();
@@ -127,8 +148,9 @@ public class TelegramBotService extends TelegramLongPollingBot {
             if (tu.isPresent()) handleLinked(chatId, tu.get(), text);
             else handleLinking(chatId, text);
         } catch (Exception e) {
-            log.error("onUpdateReceived failed: {}", e.getMessage(), e);
+            log.error("onWebhookUpdateReceived failed: {}", e.getMessage(), e);
         }
+        return null;
     }
 
     private void handleLinking(long chatId, String text) {
@@ -136,14 +158,14 @@ public class TelegramBotService extends TelegramLongPollingBot {
             String token = text.substring("/start link_".length()).trim();
             telegramLinkTokenService.resolveToken(token).ifPresentOrElse(
                 userId -> linkByToken(chatId, userId),
-                ()     -> send(chatId, "⚠️ Link expired\\. Go to the website and try again\\.")
+                ()     -> send(chatId, "⚠️ Link expired\\. Go to [triggerx\\.in](https://triggerx.in) and try again\\.")
             );
             return;
         }
         send(chatId,
-            "👋 *Welcome to TriggerX\\!*\n\n" +
+            "👋 *Welcome to [TriggerX](https://triggerx.in)\\!*\n\n" +
             "To get started:\n" +
-            "1\\. Go to the website and log in\n" +
+            "1\\. Go to [triggerx\\.in](https://triggerx.in) and log in\n" +
             "2\\. Click *Connect Telegram*\n\n" +
             "Your account will link instantly \\- no code needed\\.\n\n" +
             "_Prices are Binance spot, quoted in USDT\\._");
@@ -169,7 +191,7 @@ public class TelegramBotService extends TelegramLongPollingBot {
         String data = query.getData();
         ack(query.getId());
         Optional<TelegramUser> tu = telegramUserRepo.findByChatIdWithUser(chatId);
-        if (tu.isEmpty()) { send(chatId, "Visit the website to link your account first\\."); return; }
+        if (tu.isEmpty()) { send(chatId, "Visit [triggerx\\.in](https://triggerx.in) to link your account first\\."); return; }
         UUID userId = tu.get().getUser().getId();
         switch (data) {
             case "action:add"     -> promptNewAlert(chatId);
@@ -193,8 +215,24 @@ public class TelegramBotService extends TelegramLongPollingBot {
         UUID userId = tu.getUser().getId();
         String lower = text.toLowerCase().trim();
 
+        if (lower.startsWith("/start link_")) {
+            String token = text.substring("/start link_".length()).trim();
+            telegramLinkTokenService.resolveToken(token).ifPresentOrElse(
+                targetUserId -> {
+                    if (targetUserId.equals(userId)) {
+                        send(chatId, "✅ Already linked to *" + escapeMd(tu.getUser().getEmail()) + "*\\.", mainMenu());
+                    } else {
+                        send(chatId, "⚠️ This Telegram account is already linked to *" + escapeMd(tu.getUser().getEmail()) +
+                                "*\\. Run /unlink first if you wish to connect a different account\\.", mainMenu());
+                    }
+                },
+                () -> send(chatId, "⚠️ Link expired\\. Go to [triggerx\\.in](https://triggerx.in) and try again\\.", mainMenu())
+            );
+            return;
+        }
+
         switch (lower) {
-            case "/start"           -> { send(chatId, "✅ Already linked\\.", mainMenu()); return; }
+            case "/start"           -> { send(chatId, "✅ Already linked to *" + escapeMd(tu.getUser().getEmail()) + "*\\.", mainMenu()); return; }
             case "/list", "/alerts" -> { showAlerts(chatId, userId); return; }
             case "/add", "/new"     -> { promptNewAlert(chatId); return; }
             case "/history"         -> { showHistory(chatId, userId); return; }
@@ -528,7 +566,7 @@ public class TelegramBotService extends TelegramLongPollingBot {
         if (expiry == null || Instant.now().isAfter(expiry)) {send(chatId, "⏱ Session expired\\. Try again\\.", mainMenu()); return;}
         pendingUnlink.remove(chatId);
         telegramUserRepo.delete(tu);
-        send(chatId, "✅ *Unlinked*\\. Visit the website to reconnect\\.");
+        send(chatId, "✅ *Unlinked*\\. Visit [triggerx\\.in](https://triggerx.in) to reconnect\\.");
     }
 
     private static InlineKeyboardMarkup mainMenu() {

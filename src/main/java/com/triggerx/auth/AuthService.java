@@ -18,6 +18,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -117,11 +118,17 @@ public class AuthService {
                     .orElseThrow(() -> new IllegalStateException("User vanished after constraint violation"));
         }
 
-        JwtService.TokenResult tokenResult = jwtService.generateToken(user.getId(), user.getEmail());
+        JwtService.TokenResult tokenResult = jwtService.generateToken(user.getId(), user.getTokenVersion());
 
         log.info("OTP verified — user {} authenticated", user.getId());
 
         return new OtpVerifyResponse(user.getId(), user.getEmail(), tokenResult.token(), tokenResult.expiresAt());
+    }
+
+    @Transactional
+    public void logoutEverywhere(UUID userId) {
+        userRepository.bumpTokenVersion(userId);
+        log.info("Sessions revoked for user {}", userId);
     }
 
     private static String sha256(String input) {

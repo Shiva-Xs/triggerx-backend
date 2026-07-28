@@ -4,6 +4,7 @@ import com.triggerx.alert.AlertCondition;
 import com.triggerx.common.EmailUtils;
 import com.triggerx.common.TriggerXException;
 import jakarta.mail.MessagingException;
+import java.io.UnsupportedEncodingException;
 import jakarta.mail.internet.MimeMessage;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -18,7 +19,7 @@ import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
-@Profile("!dev")
+@Profile("!mock-mail")
 @RequiredArgsConstructor
 public class EmailService implements EmailSender {
 
@@ -37,14 +38,14 @@ public class EmailService implements EmailSender {
             MimeMessageHelper helper = new MimeMessageHelper(message, false, "UTF-8");
 
             helper.setTo(to);
-            helper.setFrom(mailFrom);
+            helper.setFrom(mailFrom, "TriggerX");
             helper.setSubject(EmailTemplates.otpSubject());
-            helper.setText(EmailTemplates.otpText(otp, otpExpiryMinutes), false);
+            helper.setText(EmailTemplates.otpHtml(otp, otpExpiryMinutes), true);
 
             mailSender.send(message);
             log.info("OTP email sent to {}", EmailUtils.maskEmail(to));
 
-        } catch (MessagingException | MailException e) {
+        } catch (MessagingException | MailException | UnsupportedEncodingException e) {
             log.error("Failed to send OTP email to {}: {}", EmailUtils.maskEmail(to), e.getMessage());
             throw TriggerXException.smtpFailed();
         }
@@ -60,14 +61,14 @@ public class EmailService implements EmailSender {
             String conditionText = condition.actionPhrase();
 
             helper.setTo(to);
-            helper.setFrom(mailFrom);
+            helper.setFrom(mailFrom, "TriggerX");
             helper.setSubject(EmailTemplates.triggerAlertSubject(symbol, conditionText, targetPrice));
-            helper.setText(EmailTemplates.triggerAlertHtml(symbol, targetPrice, triggeredPrice, conditionText, triggeredAt), true);
+            helper.setText(EmailTemplates.triggerAlertHtml(symbol, targetPrice, triggeredPrice, condition, conditionText, triggeredAt), true);
 
             mailSender.send(message);
             log.info("Trigger email sent to {}", EmailUtils.maskEmail(to));
 
-        } catch (MessagingException | MailException e) {
+        } catch (MessagingException | MailException | UnsupportedEncodingException e) {
             log.error("Failed to send trigger email to {}: {}", EmailUtils.maskEmail(to), e.getMessage());
         }
     }

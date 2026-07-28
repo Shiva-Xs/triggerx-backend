@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -48,9 +49,16 @@ public class AlertService {
         alert.setCondition(request.condition());
         alert.setStatus(AlertStatus.ACTIVE);
 
-        AlertResponse response = AlertResponse.from(alertRepository.save(alert));
+        Alert saved = alertRepository.save(alert);
         eventPublisher.publishEvent(new AlertChangedEvent(true));
-        return response;
+        return AlertResponse.from(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Long> getCounts(UUID userId) {
+        long active    = alertRepository.countByUserIdAndStatus(userId, AlertStatus.ACTIVE);
+        long triggered = alertRepository.countByUserIdAndStatus(userId, AlertStatus.TRIGGERED);
+        return Map.of("active", active, "triggered", triggered);
     }
 
     @Transactional(readOnly = true)

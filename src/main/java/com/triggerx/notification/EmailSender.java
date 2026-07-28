@@ -17,7 +17,7 @@ public interface EmailSender {
 
     @Slf4j
     @Service
-    @Profile("dev")
+    @Profile("mock-mail")
     class DevEmailSender implements EmailSender {
 
         @Override

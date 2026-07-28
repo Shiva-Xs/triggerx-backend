@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/alerts")
@@ -35,6 +36,12 @@ public class AlertController {
             @Valid @RequestBody NaturalInput request) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(naturalAlertService.parseAndCreate(request.text(), userId));
+    }
+
+    @GetMapping("/counts")
+    public ResponseEntity<Map<String, Long>> getCounts(
+            @AuthenticationPrincipal UUID userId) {
+        return ResponseEntity.ok(alertService.getCounts(userId));
     }
 
     @GetMapping

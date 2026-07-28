@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
@@ -25,6 +26,11 @@ public class BinanceSymbolRegistry {
 
     @PostConstruct
     public void loadSupportedPairs() {
+        CompletableFuture.runAsync(this::fetchAndStore)
+                .exceptionally(ex -> { log.error("BinanceSymbolRegistry async load failed", ex); return null; });
+    }
+
+    private void fetchAndStore() {
         try {
             JsonNode root = RestClient.create().get().uri(EXCHANGE_INFO_URL).retrieve().body(JsonNode.class);
             if (root == null || !root.has("symbols")) {
@@ -74,13 +80,13 @@ public class BinanceSymbolRegistry {
     public void retryIfEmpty() {
         if (tickerToStream.get().isEmpty()) {
             log.warn("BinanceSymbolRegistry is empty — retrying Binance exchange info load");
-            loadSupportedPairs();
+            fetchAndStore();
         }
     }
 
     @Scheduled(fixedRate = 6 * 60 * 60 * 1000L, initialDelay = 6 * 60 * 60 * 1000L)
     public void periodicRefresh() {
         log.info("BinanceSymbolRegistry — periodic full refresh");
-        loadSupportedPairs();
+        fetchAndStore();
     }
 }
