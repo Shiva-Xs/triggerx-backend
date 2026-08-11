@@ -2,7 +2,8 @@
 
 <div align="center">
   <p><strong>A high-performance, real-time cryptocurrency price alert system built with Spring Boot 3 & Java 21.</strong></p>
-  <p>🚀 <em>The application is accessible at <strong><a href="https://triggerx.in">triggerx.in</a></strong></em></p>
+  <p>🚀 <em>The application is accessible at <strong><a href="https://www.triggerx.in">www.triggerx.in</a></strong></em></p>
+  <p><em>Frontend: <a href="https://github.com/Shiva-Xs/triggerx-frontend">triggerx-frontend</a></em></p>
 </div>
 
 TriggerX enables users to set customizable price targets on Binance trading pairs. It delivers instant, zero-latency notifications via **Email** and **Telegram** when specified price thresholds are met.
