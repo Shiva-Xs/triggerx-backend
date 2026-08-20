@@ -186,6 +186,18 @@ public class BinanceWebSocketService {
                     .toList();
 
             if (streams.isEmpty()) {
+                // The symbol registry loads from Binance asynchronously, so at startup
+                // connect() can win the race and see an empty registry. Every symbol then
+                // looks unsupported and we would park in IDLE forever with alerts active:
+                // retryIfEmpty() only reloads an empty registry, and nothing else calls
+                // connect() again until an alert is created or deleted. Retry instead.
+                if (!activeSymbols.isEmpty() && !symbolRegistry.isReady()) {
+                    log.info("Symbol registry not loaded yet, retrying connect for {} active symbol(s)",
+                            activeSymbols.size());
+                    wsStatus = WsStatus.RECONNECTING;
+                    scheduleReconnect();
+                    return;
+                }
                 log.info("No active alerts with supported Binance symbols — WebSocket idle");
                 wsStatus = WsStatus.IDLE;
                 return;

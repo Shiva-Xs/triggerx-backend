@@ -55,6 +55,15 @@ public class BinanceSymbolRegistry {
         }
     }
 
+    /**
+     * True once the Binance pair list has actually loaded. The load is async, so
+     * callers that filter on {@link #isSupported} need to tell "not supported"
+     * apart from "not loaded yet".
+     */
+    public boolean isReady() {
+        return !tickerToStream.get().isEmpty();
+    }
+
     public boolean isSupported(String ticker) {
         return tickerToStream.get().containsKey(ticker.toUpperCase());
     }
