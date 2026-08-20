@@ -10,7 +10,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
-import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -24,153 +25,178 @@ import static org.mockito.Mockito.when;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class LocalIntentParserTest {
 
-    private static final Set<String> LISTED =
-            Set.of("BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LINK", "PEPE", "NEAR", "ATOM");
+    private static final Set<String> LISTED = Set.of(
+            "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LINK", "PEPE", "NEAR", "ATOM", "BNB");
 
-    @Mock
-    private BinanceSymbolRegistry symbolRegistry;
+    /** The only intents this parser is allowed to claim. */
+    private static final Set<String> ALLOWED = Set.of(
+            "GREETING", "FAREWELL", "LIST_ALERTS", "DELETE_ALL", "DELETE_ALERT", "PRICE_CHECK");
 
+    @Mock private BinanceSymbolRegistry symbolRegistry;
     private LocalIntentParser parser;
 
     @BeforeEach
     void setUp() {
         when(symbolRegistry.isSupported(anyString()))
-                .thenAnswer(inv -> LISTED.contains(inv.getArgument(0, String.class).toUpperCase()));
+                .thenAnswer(i -> LISTED.contains(i.getArgument(0, String.class).toUpperCase()));
         parser = new LocalIntentParser(symbolRegistry);
     }
 
-    private ParsedMessage parse(String text) {
-        return parser.parse(text).orElseThrow(
-                () -> new AssertionError("expected a local match for: " + text));
+    private ParsedMessage parse(String t) {
+        return parser.parse(t).orElseThrow(() -> new AssertionError("expected a local match: " + t));
     }
 
-    private void assertDefers(String text) {
-        assertTrue(parser.parse(text).isEmpty(), "expected fall-through to LLM for: " + text);
+    private void assertDefers(String t) {
+        assertTrue(parser.parse(t).isEmpty(), "must defer to the LLM: " + t);
     }
 
-    private void assertAlert(String text, String symbol, String condition, String price) {
-        ParsedMessage m = parse(text);
-        assertEquals("CREATE_ALERT", m.intent(), text);
-        assertEquals(symbol, m.symbol(), text);
-        assertEquals(condition, m.condition(), text);
-        assertEquals(0, new BigDecimal(price).compareTo(m.targetPrice()), text);
-    }
+    // ─── The invariant that makes the class safe ────────────────────────────
 
+    /**
+     * The parser must never claim an intent that builds an alert, and must never
+     * emit a price or a percentage. Both production bugs were violations of this.
+     */
     @Test
-    void parsesDirectionalAlerts() {
-        assertAlert("btc above 80000", "BTC", "ABOVE", "80000");
-        assertAlert("BTC above 80,000", "BTC", "ABOVE", "80000");
-        assertAlert("ethereum drops below 2000", "ETH", "BELOW", "2000");
-        assertAlert("alert when bitcoin hits 73400", "BTC", "CROSSES", "73400");
-        assertAlert("notify me at sol 150", "SOL", "CROSSES", "150");
-        assertAlert("alert me when btc goes above 90k", "BTC", "ABOVE", "90000");
-        assertAlert("tell me if eth falls below 1.5k", "ETH", "BELOW", "1500");
-    }
+    void neverClaimsAnAlertBuildingIntentAcrossAGeneratedCorpus() {
+        List<String> corpus = new ArrayList<>();
+        String[] syms = {"btc", "eth", "bitcoin", "ethereum", "sol", "doge", "BTC", "Eth"};
+        String[] dirs = {"above", "below", "over", "under", "hits", "crosses", "reaches",
+                         "up", "down", "drops below", "rises above", "falls", "gains", "past", ""};
+        String[] nums = {"80000", "0.1", "2", "70k", "1.5m", "80,000", "2300.55", "5"};
+        String[] pcts = {"%", " percent", " pct", " percentage", "  %", " PERCENT"};
+        String[] leads = {"", "alert me when ", "notify if ", "tell me when ", "ping me if ",
+                          "buzz me the moment ", "please ", "can you alert when "};
+        String[] tails = {"", " please", " from current price", " from currrent price",
+                          " right now", " thanks", "!", "?", "."};
 
-    @Test
-    void treatsMissingDirectionAsAmbiguous() {
-        ParsedMessage m = parse("bitcoin 70k");
-        assertEquals("AMBIGUOUS", m.intent());
-        assertEquals("BTC", m.symbol());
-        assertEquals(0, new BigDecimal("70000").compareTo(m.targetPrice()));
-        assertEquals("AMBIGUOUS", parse("btc 80000").intent());
-    }
+        for (String sym : syms)
+            for (String dir : dirs)
+                for (String num : nums) {
+                    for (String lead : leads) corpus.add(lead + sym + " " + dir + " " + num);
+                    for (String pct : pcts)  corpus.add(sym + " " + dir + " " + num + pct);
+                    for (String tail : tails) corpus.add(sym + " " + dir + " " + num + tail);
+                }
 
-    @Test
-    void parsesPercentageAlerts() {
-        ParsedMessage up = parse("btc up 10%");
-        assertEquals("PCT_ALERT", up.intent());
-        assertEquals("BTC", up.symbol());
-        assertEquals(0, new BigDecimal("10").compareTo(up.percentTarget()));
-
-        ParsedMessage down = parse("notify if eth falls 5%");
-        assertEquals("PCT_ALERT", down.intent());
-        assertEquals(0, new BigDecimal("-5").compareTo(down.percentTarget()));
-    }
-
-    @Test
-    void treatsTheSpelledOutWordPercentAsAPercentage() {
-        // Reported from the Telegram bot: "Eth above 0.1 percent from currrent price"
-        // was read as an absolute $0.1 target and fired immediately.
-        ParsedMessage m = parse("eth above 0.1 percent from currrent price");
-        assertEquals("PCT_ALERT", m.intent());
-        assertEquals("ETH", m.symbol());
-        assertEquals(0, new BigDecimal("0.1").compareTo(m.percentTarget()));
-
-        ParsedMessage two = parse("eth above 2 percent");
-        assertEquals("PCT_ALERT", two.intent());
-        assertEquals(0, new BigDecimal("2").compareTo(two.percentTarget()));
-
-        ParsedMessage down = parse("btc below 5 percent");
-        assertEquals("PCT_ALERT", down.intent());
-        assertEquals(0, new BigDecimal("-5").compareTo(down.percentTarget()));
-    }
-
-    @Test
-    void neverReadsAPercentageAsAnAbsolutePrice() {
-        for (String text : new String[]{
-                "eth above 0.1 percent from currrent price", "eth above 2 percent",
-                "btc up 3 pct", "sol down 4 percentage", "btc above 1.5%"}) {
-            ParsedMessage m = parser.parse(text).orElse(null);
-            if (m == null) continue;                    // deferring to the LLM is acceptable
-            assertEquals("PCT_ALERT", m.intent(), text);
-            assertNull(m.targetPrice(), "percentage must not become an absolute price: " + text);
+        int deferred = 0;
+        for (String text : corpus) {
+            Optional<ParsedMessage> got = parser.parse(text);
+            if (got.isEmpty()) { deferred++; continue; }
+            ParsedMessage m = got.get();
+            assertTrue(ALLOWED.contains(m.intent()),
+                    "claimed a forbidden intent " + m.intent() + " for: " + text);
+            assertNull(m.targetPrice(), "emitted a price for: " + text);
+            assertNull(m.percentTarget(), "emitted a percentage for: " + text);
         }
+        assertTrue(corpus.size() > 3000, "corpus too small: " + corpus.size());
+        // Every one of these describes an alert, so every one belongs to the model.
+        assertEquals(corpus.size(), deferred,
+                "some alert phrasings were handled locally instead of deferred");
     }
 
     @Test
-    void parsesPriceChecks() {
-        assertEquals("PRICE_CHECK", parse("btc price").intent());
-        assertEquals("BTC", parse("price of bitcoin").symbol());
-        assertEquals("BTC", parse("what's the price of btc").symbol());
-        assertEquals("PRICE_CHECK", parse("btc").intent());
-        assertEquals("BTC", parse("bitcoin").symbol());
+    void defersTheExactMessagesThatCausedProductionBugs() {
+        assertDefers("Eth above 0.1 percent from currrent price");
+        assertDefers("Eth above 2 percent");
+        assertDefers("Eth 5 percent");
+        assertDefers("eth above 0.1");
+        assertDefers("btc above 80000");
+        assertDefers("bitcoin 70k");
+        assertDefers("btc up 10%");
+        assertDefers("notify if eth falls 5%");
+        assertDefers("delete my btc alerts");
+    }
+
+    // ─── What it does handle ────────────────────────────────────────────────
+
+    @Test
+    void handlesListAlerts() {
+        for (String t : new String[]{"alerts", "my alerts", "show my alerts", "list alerts",
+                "view my alerts", "show me my alerts", "display active alerts",
+                "check my current alerts", "ALERTS", "  my   alerts  ", "my alerts?"})
+            assertEquals("LIST_ALERTS", parse(t).intent(), t);
     }
 
     @Test
-    void parsesListAndDelete() {
-        assertEquals("LIST_ALERTS", parse("show my alerts").intent());
-        assertEquals("LIST_ALERTS", parse("alerts").intent());
-        assertEquals("LIST_ALERTS", parse("list alerts").intent());
-        assertEquals("DELETE_ALL", parse("delete all alerts").intent());
-        assertEquals("DELETE_ALL", parse("clear all").intent());
-        assertEquals("DELETE_ALL", parse("remove all my alerts").intent());
+    void handlesDeleteAll() {
+        for (String t : new String[]{"delete all", "clear all", "remove all", "cancel all",
+                "delete all alerts", "remove all my alerts", "clear everything",
+                "delete them all", "wipe all alerts", "DELETE ALL!"})
+            assertEquals("DELETE_ALL", parse(t).intent(), t);
+    }
+
+    @Test
+    void handlesDeleteByNumber() {
+        assertEquals(2, parse("delete 2").deleteTarget());
         assertEquals(2, parse("delete alert 2").deleteTarget());
-        assertEquals(3, parse("delete 3").deleteTarget());
+        assertEquals(4, parse("remove #4").deleteTarget());
+        assertEquals(7, parse("cancel alert number 7").deleteTarget());
+        assertEquals(11, parse("delete 11").deleteTarget());
     }
 
     @Test
-    void parsesGreetings() {
-        assertEquals("GREETING", parse("hi").intent());
-        assertEquals("GREETING", parse("hello").intent());
-        assertEquals("GREETING", parse("how are you").intent());
-        assertEquals("FAREWELL", parse("bye").intent());
-        assertEquals("FAREWELL", parse("thanks").intent());
+    void handlesPriceChecks() {
+        for (String t : new String[]{"btc price", "BTC price", "price of btc", "price for eth",
+                "price btc", "what is the price of btc", "what's the current price of btc",
+                "the latest price of sol", "btc", "bitcoin", "ethereum", "  ETH  "}) {
+            ParsedMessage m = parse(t);
+            assertEquals("PRICE_CHECK", m.intent(), t);
+            assertNull(m.targetPrice(), t);
+        }
+        assertEquals("BTC", parse("price of bitcoin").symbol());
+        assertEquals("ETH", parse("ethereum").symbol());
     }
 
     @Test
-    void isCaseAndPunctuationInsensitive() {
-        assertAlert("BTC ABOVE 80000!", "BTC", "ABOVE", "80000");
-        assertAlert("  Bitcoin   Above   80000  ", "BTC", "ABOVE", "80000");
+    void handlesGreetingsAndFarewells() {
+        for (String t : new String[]{"hi", "hello", "hey", "how are you", "good morning", "HELLO!"})
+            assertEquals("GREETING", parse(t).intent(), t);
+        for (String t : new String[]{"bye", "goodbye", "thanks", "thank you", "ty", "good night"})
+            assertEquals("FAREWELL", parse(t).intent(), t);
+    }
+
+    // ─── Boundaries ─────────────────────────────────────────────────────────
+
+    @Test
+    void defersEverythingElse() {
+        for (String t : new String[]{"", "   ", "wen lambo ser", "hello there", "can you help me",
+                "what can this bot do", "delete", "delete all my btc alerts", "price",
+                "price of", "price of tesla", "set something up", "help", "/start",
+                "i want to buy bitcoin", "is bitcoin going up",
+                "a very long message that goes well past the sixty character ceiling on purpose"})
+            assertDefers(t);
     }
 
     @Test
-    void defersAnythingItCannotResolveConfidently() {
-        assertDefers("delete my btc alerts");                 // symbol-scoped delete
-        assertDefers("wen lambo ser");                        // no symbol, no intent
-        assertDefers("btc above 80000 and eth below 2000");   // two symbols
-        assertDefers("alert me between 70000 and 80000 btc"); // two numbers
-        assertDefers("swap my btc for eth");                  // two symbols
-        assertDefers("");
-        assertDefers("   ");
-        assertDefers("I was thinking that maybe if bitcoin were to go somewhere "
-                   + "near about eighty thousand dollars you could ping me");  // long prose
+    void doesNotReadEnglishWordsAsTickers() {
+        for (String t : new String[]{"price of tesla", "price of nothing", "help", "status",
+                "settings", "cancel", "stop", "start"})
+            assertDefers(t);
     }
 
     @Test
-    void doesNotMistakeEnglishWordsForTickers() {
-        assertDefers("can you help me");
-        assertDefers("what can this bot do");
-        assertDefers("set something up for me");
+    void anyDigitOrPercentSignDefersExceptDeleteByNumber() {
+        for (String t : new String[]{"btc 5", "alerts 2", "price of btc 5", "eth 100%",
+                "50 percent", "show 3 alerts", "100"})
+            assertDefers(t);
+        assertEquals(2, parse("delete 2").deleteTarget());   // the single carve-out
+    }
+
+    @Test
+    void handlesNullAndWhitespaceWithoutThrowing() {
+        assertTrue(parser.parse(null).isEmpty());
+        assertTrue(parser.parse("").isEmpty());
+        assertTrue(parser.parse("\n\t  ").isEmpty());
+        assertTrue(parser.parse("!!!").isEmpty());
+    }
+
+    @Test
+    void defersWhenTheSymbolRegistryHasNotLoaded() {
+        when(symbolRegistry.isSupported(anyString())).thenReturn(false);
+        LocalIntentParser cold = new LocalIntentParser(symbolRegistry);
+        assertTrue(cold.parse("btc price").isEmpty());
+        assertTrue(cold.parse("sol").isEmpty());
+        // Alias-backed names still resolve, and command shapes never needed the registry.
+        assertEquals("BTC", cold.parse("bitcoin").orElseThrow().symbol());
+        assertEquals("LIST_ALERTS", cold.parse("my alerts").orElseThrow().intent());
     }
 }

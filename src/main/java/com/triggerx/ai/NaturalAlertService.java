@@ -54,8 +54,12 @@ public class NaturalAlertService {
             CROSSES: price touches this level from either direction ("hits", "reaches", "at", "crosses").
             ABOVE: price goes above/over/past a level.
             BELOW: price drops below/under a level.
-            AMBIGUOUS: user gave a symbol and price but NO direction — return AMBIGUOUS, do NOT guess.
-            PCT_ALERT: user wants an alert based on % move from current price ("up 10%", "down 5%", "+15%").
+            AMBIGUOUS: user gave a symbol and a number but NO direction — return AMBIGUOUS, do NOT guess.
+            This covers percentages too: "eth 5 percent" states no direction, so return AMBIGUOUS with
+            percentTarget POSITIVE and no targetPrice. Never assume the user meant up.
+            PCT_ALERT: % move from current price WITH an explicit direction. "up"/"rises"/"gains"/"above"
+            are positive; "down"/"drops"/"falls"/"below" are negative. Words and signs are equivalent:
+            "2 percent", "2 pct" and "2%" all mean the same thing.
 
             Examples:
             "btc above 80000"              → {"intent":"CREATE_ALERT","symbol":"BTC","condition":"ABOVE","targetPrice":80000}
@@ -66,6 +70,11 @@ public class NaturalAlertService {
             "bitcoin 70k"                  → {"intent":"AMBIGUOUS","symbol":"BTC","targetPrice":70000}
             "alert me when btc is up 10%"  → {"intent":"PCT_ALERT","symbol":"BTC","percentTarget":10.0}
             "notify if eth falls 5%"       → {"intent":"PCT_ALERT","symbol":"ETH","percentTarget":-5.0}
+            "eth above 2 percent"          → {"intent":"PCT_ALERT","symbol":"ETH","percentTarget":2.0}
+            "eth below 3 percent"          → {"intent":"PCT_ALERT","symbol":"ETH","percentTarget":-3.0}
+            "btc up 3 pct"                 → {"intent":"PCT_ALERT","symbol":"BTC","percentTarget":3.0}
+            "eth 5 percent"                → {"intent":"AMBIGUOUS","symbol":"ETH","percentTarget":5.0}
+            "btc 10%"                      → {"intent":"AMBIGUOUS","symbol":"BTC","percentTarget":10.0}
             "show my alerts"               → {"intent":"LIST_ALERTS"}
             "delete alert 2"               → {"intent":"DELETE_ALERT","deleteTarget":2}
             "delete btc alerts"            → {"intent":"DELETE_ALERT","symbol":"BTC"}
@@ -138,7 +147,12 @@ public class NaturalAlertService {
             log.debug("Intent: {} for: {}", msg.intent(), text);
             return msg;
         } catch (Exception e) {
-            log.warn("AI intent call failed: {}", e.getMessage());
+            String detail = String.valueOf(e.getMessage());
+            if (detail.contains("429") || detail.contains("RESOURCE_EXHAUSTED")) {
+                log.warn("AI intent call rate-limited: {}", truncate(detail));
+                throw TriggerXException.aiRateLimited();
+            }
+            log.warn("AI intent call failed: {}", truncate(detail));
             throw TriggerXException.aiUnavailable();
         }
     }
@@ -162,6 +176,11 @@ public class NaturalAlertService {
             return alertService.createAlert(userId, new AlertRequest(pctSym, targetPrice, AlertCondition.valueOf(cond)));
         }
 
+        if ("AMBIGUOUS".equals(msg.intent()) && msg.percentTarget() != null)
+            throw TriggerXException.parseFailed(
+                    "Which direction? Try: '" + (msg.symbol() == null ? "BTC" : msg.symbol())
+                    + " up " + msg.percentTarget().stripTrailingZeros().toPlainString()
+                    + "%' or '... down " + msg.percentTarget().stripTrailingZeros().toPlainString() + "%'");
         if (msg.symbol() == null || msg.condition() == null || targetPrice == null)
             throw TriggerXException.parseFailed("Could not extract alert details. Try: 'BTC above 80000'");
         if (targetPrice.compareTo(BigDecimal.ZERO) <= 0)
@@ -196,6 +215,11 @@ public class NaturalAlertService {
             log.warn("Binance REST price fallback failed for {}: {}", sym, e.getMessage());
             return Optional.empty();
         }
+    }
+
+    /** Provider errors carry a full JSON body; keep the log line readable. */
+    private static String truncate(String s) {
+        return s == null ? "null" : s.length() <= 200 ? s : s.substring(0, 200) + "...";
     }
 
     private void checkConfigured() {

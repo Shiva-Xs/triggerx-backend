@@ -110,6 +110,17 @@ public class TriggerXException extends RuntimeException {
                 HttpStatus.SERVICE_UNAVAILABLE);
     }
 
+    /**
+     * The AI provider refused because we are over its per-minute quota. Separate from
+     * aiUnavailable so the caller can say "wait a moment" rather than "it is broken":
+     * the free tier allows 15 requests a minute, which a burst of messages can reach.
+     */
+    public static TriggerXException aiRateLimited() {
+        return new TriggerXException("AI_RATE_LIMITED",
+                "Too many AI requests just now. Try again in a minute, or use the standard alert form.",
+                HttpStatus.TOO_MANY_REQUESTS);
+    }
+
     public static TriggerXException noLivePrice(String symbol) {
         return new TriggerXException("NO_LIVE_PRICE",
                 "No live price data for '" + symbol.toUpperCase() + "' yet. Try again in a moment.",

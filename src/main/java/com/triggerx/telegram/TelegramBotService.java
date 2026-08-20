@@ -204,6 +204,8 @@ public class TelegramBotService extends TelegramWebhookBot {
             case "confirm:deletesym" -> executeDeleteSymbol(chatId, userId);
             case "confirm:cancel"    -> { clearPending(chatId); send(chatId, "❌ Cancelled\\.", mainMenu()); }
             case "confirm:unlink"    -> executeUnlink(chatId, userId, tu.get());
+            case "dir:pctup"      -> resolvePctDirection(chatId, true);
+            case "dir:pctdown"    -> resolvePctDirection(chatId, false);
             case "dir:above"      -> resolveAmbiguous(chatId, userId, "ABOVE");
             case "dir:below"      -> resolveAmbiguous(chatId, userId, "BELOW");
             case "dir:crosses"    -> resolveAmbiguous(chatId, userId, "CROSSES");
@@ -403,6 +405,7 @@ public class TelegramBotService extends TelegramWebhookBot {
             switch (e.getErrorCode()) {
                 case "AI_NOT_CONFIGURED" -> send(chatId, "🤖 AI is not configured on this server\\.");
                 case "AI_UNAVAILABLE"    -> send(chatId, "🤖 AI service is unavailable\\. Try again shortly\\.");
+                case "AI_RATE_LIMITED"   -> send(chatId, "⏳ Too many AI requests right now\\. Give it a minute, or use *My Alerts* and the buttons\\.", mainMenu());
                 default                  -> send(chatId, err(e));
             }
         } catch (Exception e) {
@@ -462,6 +465,22 @@ public class TelegramBotService extends TelegramWebhookBot {
     }
 
     private void handleAmbiguous(long chatId, NaturalAlertService.ParsedMessage msg) {
+        // A percentage with no direction. "ETH 5 percent" is as unresolved as "ETH 3000":
+        // guessing up produces a wrong alert, so ask rather than assume.
+        if (msg.percentTarget() != null && msg.targetPrice() == null) {
+            if (msg.symbol() == null) {
+                send(chatId, "🤔 Which coin\\? Try\\: _ETH up 5%_", mainMenu());
+                return;
+            }
+            pendingDirections.put(chatId, Pending.of(msg));
+            String pct = msg.percentTarget().abs().stripTrailingZeros().toPlainString();
+            send(chatId,
+                String.format("↕️ *%s %s%%* \\- up or down from the current price\\?",
+                    escapeMd(msg.symbol()), escapeMd(pct)),
+                keyboard(row(btn("📈 Up " + pct + "%", "dir:pctup"),
+                             btn("📉 Down " + pct + "%", "dir:pctdown"))));
+            return;
+        }
         if (msg.symbol() == null || msg.targetPrice() == null) {
             send(chatId, "🤔 I didn't catch the coin or price\\. Try\\: _BTC 80000_", mainMenu());
             return;
@@ -486,6 +505,14 @@ public class TelegramBotService extends TelegramWebhookBot {
             "CREATE_ALERT", p.msg().symbol(), direction, p.msg().targetPrice(), null, null);
         pendingConfirmations.put(chatId, Pending.of(resolved));
         showConfirmation(chatId, resolved);
+    }
+
+    private void resolvePctDirection(long chatId, boolean up) {
+        Pending p = pendingDirections.remove(chatId);
+        if (p == null) { send(chatId, "⏱ Session expired\\. Try again\\.", mainMenu()); return; }
+        java.math.BigDecimal pct = p.msg().percentTarget().abs();
+        handlePctAlert(chatId, new NaturalAlertService.ParsedMessage(
+            "PCT_ALERT", p.msg().symbol(), null, null, null, up ? pct : pct.negate()));
     }
 
     private void handlePctAlert(long chatId, NaturalAlertService.ParsedMessage msg) {
