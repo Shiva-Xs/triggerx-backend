@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -70,6 +71,8 @@ public class LocalIntentParser {
     /** "btc price" / "price of btc" / "what is the current price of btc". */
     private static final Pattern PRICE_SUFFIX_RE = Pattern.compile(
             "^([a-z]{2,12})\\s+price$");
+    private static final Pattern CANONICAL_NUMBER = Pattern.compile(
+            "([0-9][0-9,]*(?:\\.[0-9]+)?)([km])?");
     private static final Pattern PRICE_PREFIX_RE = Pattern.compile(
             "^((what\\s+is|what'?s)\\s+)?(the\\s+)?(current\\s+|live\\s+|latest\\s+)?"
           + "price\\s+(of|for)?\\s*([a-z]{2,12})$");
@@ -109,6 +112,59 @@ public class LocalIntentParser {
         if (s.matches("[a-z]+")) return priceCheck(s);
 
         return Optional.empty();
+    }
+
+    /**
+     * The one alert shape that needs no interpretation: exactly "SYMBOL DIRECTION NUMBER",
+     * as in "btc above 80000". Used only as a fallback once the AI provider has already
+     * failed, never before it.
+     *
+     * Running after the model rather than in front of it is what makes this safe. A
+     * wrong guess here cannot override a correct answer, because a correct answer means
+     * this is never reached; the only alternative at this point is a hard error. The
+     * grammar is whole-string and three tokens exactly, so there is no free text to
+     * misread, and the user still confirms the parsed alert before it is created.
+     *
+     * Percentages are deliberately absent. They need the live price and a signed
+     * direction, which is interpretation, so they stay with the model.
+     */
+    public Optional<ParsedMessage> parseCanonicalAlert(String raw) {
+        if (raw == null || raw.isBlank()) return Optional.empty();
+        String s = raw.toLowerCase().trim()
+                .replaceAll("[!?.]+$", "")
+                .replace("$", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (s.indexOf('%') >= 0) return Optional.empty();
+
+        String[] parts = s.split(" ");
+        if (parts.length != 3) return Optional.empty();
+
+        String symbol = resolve(parts[0]);
+        if (symbol == null) return Optional.empty();
+
+        String condition = switch (parts[1]) {
+            case "above", "over"    -> "ABOVE";
+            case "below", "under"   -> "BELOW";
+            case "hits", "hit", "crosses", "at" -> "CROSSES";
+            default -> null;
+        };
+        if (condition == null) return Optional.empty();
+
+        BigDecimal target = number(parts[2]);
+        if (target == null || target.signum() <= 0) return Optional.empty();
+        return Optional.of(new ParsedMessage("CREATE_ALERT", symbol, condition, target, null, null));
+    }
+
+    /** "80000", "80,000", "70k" and "1.5m". Null when the token is not purely a number. */
+    private static BigDecimal number(String token) {
+        Matcher m = CANONICAL_NUMBER.matcher(token);
+        if (!m.matches()) return null;
+        BigDecimal value = new BigDecimal(m.group(1).replace(",", ""));
+        String suffix = m.group(2);
+        if ("k".equals(suffix)) return value.movePointRight(3);
+        if ("m".equals(suffix)) return value.movePointRight(6);
+        return value;
     }
 
     private Optional<ParsedMessage> priceCheck(String token) {

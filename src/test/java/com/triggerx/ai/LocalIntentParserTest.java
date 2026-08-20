@@ -181,8 +181,63 @@ class LocalIntentParserTest {
         assertEquals(2, parse("delete 2").deleteTarget());   // the single carve-out
     }
 
+    // ─── The canonical fallback grammar ─────────────────────────────────────
+
+    private void assertCanonical(String t, String sym, String cond, String price) {
+        ParsedMessage m = parser.parseCanonicalAlert(t)
+                .orElseThrow(() -> new AssertionError("canonical grammar rejected: " + t));
+        assertEquals("CREATE_ALERT", m.intent(), t);
+        assertEquals(sym, m.symbol(), t);
+        assertEquals(cond, m.condition(), t);
+        assertEquals(0, new java.math.BigDecimal(price).compareTo(m.targetPrice()), t);
+    }
+
+    private void assertCanonicalRejects(String t) {
+        assertTrue(parser.parseCanonicalAlert(t).isEmpty(), "grammar must reject: " + t);
+    }
+
+    @Test
+    void canonicalGrammarAcceptsTheExactThreeTokenForm() {
+        assertCanonical("btc above 80000", "BTC", "ABOVE", "80000");
+        assertCanonical("BTC ABOVE 80000", "BTC", "ABOVE", "80000");
+        assertCanonical("bitcoin above 80000", "BTC", "ABOVE", "80000");
+        assertCanonical("eth below 2000", "ETH", "BELOW", "2000");
+        assertCanonical("sol hits 150", "SOL", "CROSSES", "150");
+        assertCanonical("btc crosses 90000", "BTC", "CROSSES", "90000");
+        assertCanonical("btc over 80000", "BTC", "ABOVE", "80000");
+        assertCanonical("eth under 2000", "ETH", "BELOW", "2000");
+        assertCanonical("btc above 80,000", "BTC", "ABOVE", "80000");
+        assertCanonical("btc above $80000", "BTC", "ABOVE", "80000");
+        assertCanonical("btc above 70k", "BTC", "ABOVE", "70000");
+        assertCanonical("btc above 1.5m", "BTC", "ABOVE", "1500000");
+        assertCanonical("  eth   below   2000  ", "ETH", "BELOW", "2000");
+        assertCanonical("eth below 2000.", "ETH", "BELOW", "2000");
+    }
+
+    @Test
+    void canonicalGrammarRejectsAnythingItCannotBeSureOf() {
+        for (String t : new String[]{
+                "eth above 2 percent", "eth above 0.1 percent from currrent price",
+                "btc up 10%", "eth 5 percent",                       // percentages
+                "alert me when btc goes above 80000",                // prose
+                "btc goes above 80000", "btc above eighty thousand", // wrong shape
+                "btc above", "btc 80000", "above 80000", "btc",      // incomplete
+                "btc above 80000 and eth below 2000",                // compound
+                "tesla above 100", "hello above 80000",              // not a ticker
+                "btc sideways 80000", "btc above -5",  "btc above 0",// bad direction/number
+                "delete all", "my alerts", "", "   "})
+            assertCanonicalRejects(t);
+    }
+
+    @Test
+    void canonicalGrammarNeverEmitsAPercentage() {
+        for (String t : new String[]{"btc above 80000", "eth below 2000", "sol hits 150"})
+            assertNull(parser.parseCanonicalAlert(t).orElseThrow().percentTarget(), t);
+    }
+
     @Test
     void handlesNullAndWhitespaceWithoutThrowing() {
+        assertTrue(parser.parseCanonicalAlert(null).isEmpty());
         assertTrue(parser.parse(null).isEmpty());
         assertTrue(parser.parse("").isEmpty());
         assertTrue(parser.parse("\n\t  ").isEmpty());

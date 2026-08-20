@@ -100,13 +100,13 @@ public class TriggerXException extends RuntimeException {
 
     public static TriggerXException aiNotConfigured() {
         return new TriggerXException("AI_NOT_CONFIGURED",
-                "AI mode is not available right now.",
+                "AI mode is not available right now. Plain 'BTC above 80000' still works.",
                 HttpStatus.SERVICE_UNAVAILABLE);
     }
 
     public static TriggerXException aiUnavailable() {
         return new TriggerXException("AI_UNAVAILABLE",
-                "Could not process your request right now. Use the standard alert form instead.",
+                "Could not process that right now. Plain 'BTC above 80000' still works.",
                 HttpStatus.SERVICE_UNAVAILABLE);
     }
 
@@ -117,7 +117,7 @@ public class TriggerXException extends RuntimeException {
      */
     public static TriggerXException aiRateLimited() {
         return new TriggerXException("AI_RATE_LIMITED",
-                "Too many AI requests just now. Try again in a minute, or use the standard alert form.",
+                "Too many AI requests just now. Plain 'BTC above 80000' still works, or try again in a minute.",
                 HttpStatus.TOO_MANY_REQUESTS);
     }
 

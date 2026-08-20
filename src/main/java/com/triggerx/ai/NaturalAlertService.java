@@ -135,7 +135,12 @@ public class NaturalAlertService {
             log.debug("Local intent: {} for: {}", local.get().intent(), text);
             return local.get();
         }
-        checkConfigured();
+        // With no key at all there is nothing to fall back from, so go straight to the
+        // grammar and let a canonical "btc above 80000" through.
+        if (aiApiKey == null || aiApiKey.isBlank()) {
+            return localIntentParser.parseCanonicalAlert(text)
+                    .orElseThrow(TriggerXException::aiNotConfigured);
+        }
         try {
             ParsedMessage msg = chatClient.prompt()
                     .system(SYSTEM_PROMPT)
@@ -148,6 +153,15 @@ public class NaturalAlertService {
             return msg;
         } catch (Exception e) {
             String detail = String.valueOf(e.getMessage());
+            // The provider is down or over quota. "btc above 80000" carries no ambiguity,
+            // so answer it from the canonical grammar rather than making the user wait out
+            // the outage. Reached only after the model has already failed, so this can
+            // never override a correct answer.
+            Optional<ParsedMessage> canonical = localIntentParser.parseCanonicalAlert(text);
+            if (canonical.isPresent()) {
+                log.info("AI unavailable, served canonical grammar for: {}", text);
+                return canonical.get();
+            }
             if (detail.contains("429") || detail.contains("RESOURCE_EXHAUSTED")) {
                 log.warn("AI intent call rate-limited: {}", truncate(detail));
                 throw TriggerXException.aiRateLimited();
@@ -222,7 +236,4 @@ public class NaturalAlertService {
         return s == null ? "null" : s.length() <= 200 ? s : s.substring(0, 200) + "...";
     }
 
-    private void checkConfigured() {
-        if (aiApiKey == null || aiApiKey.isBlank()) throw TriggerXException.aiNotConfigured();
-    }
 }

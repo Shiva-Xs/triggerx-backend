@@ -257,7 +257,8 @@ public class TelegramBotService extends TelegramWebhookBot {
             "Just type it naturally:\n" +
             "• _BTC drops below 70000_\n" +
             "• _notify me when ETH hits 3500_\n" +
-            "• _alert if SOL goes above 150_",
+            "• _alert if SOL goes above 150_\n\n" +
+            "_Tip: the exact form *BTC above 80000* always works, even if AI is busy\\._",
             keyboard(row(btn("❌ Cancel", "action:list"))));
     }
 
@@ -403,9 +404,13 @@ public class TelegramBotService extends TelegramWebhookBot {
             }
         } catch (TriggerXException e) {
             switch (e.getErrorCode()) {
-                case "AI_NOT_CONFIGURED" -> send(chatId, "🤖 AI is not configured on this server\\.");
-                case "AI_UNAVAILABLE"    -> send(chatId, "🤖 AI service is unavailable\\. Try again shortly\\.");
-                case "AI_RATE_LIMITED"   -> send(chatId, "⏳ Too many AI requests right now\\. Give it a minute, or use *My Alerts* and the buttons\\.", mainMenu());
+                case "AI_NOT_CONFIGURED", "AI_UNAVAILABLE", "AI_RATE_LIMITED" -> send(chatId,
+                    "⏳ *Plain English is unavailable right now\\.*\n\n" +
+                    "You can still create alerts using the exact form:\n" +
+                    "• _BTC above 80000_\n" +
+                    "• _ETH below 2000_\n" +
+                    "• _SOL hits 150_\n\n" +
+                    "_coin, then above/below/hits, then the price\\._", mainMenu());
                 default                  -> send(chatId, err(e));
             }
         } catch (Exception e) {
