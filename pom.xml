@@ -20,7 +20,7 @@
 
     <properties>
         <java.version>21</java.version>
-        <lombok.version>1.18.36</lombok.version>
+        <lombok.version>1.18.46</lombok.version>
         <spring-ai.version>1.0.0</spring-ai.version>
         <!-- Spring AI 1.0.0 GA is on Maven Central — no extra repository needed. -->
     </properties>

@@ -26,6 +26,7 @@ import java.util.UUID;
 public class NaturalAlertService {
 
     private final ChatClient chatClient;
+    private final LocalIntentParser localIntentParser;
     private final AlertService alertService;
     private final BinanceWebSocketService binanceWebSocketService;
     private final BinanceSymbolRegistry symbolRegistry;
@@ -118,6 +119,13 @@ public class NaturalAlertService {
     }
 
     public ParsedMessage parseIntent(String text) {
+        // Common phrasings are resolved locally: no API call, no latency, and
+        // they keep working when the AI provider is rate-limited or down.
+        Optional<ParsedMessage> local = localIntentParser.parse(text);
+        if (local.isPresent()) {
+            log.debug("Local intent: {} for: {}", local.get().intent(), text);
+            return local.get();
+        }
         checkConfigured();
         try {
             ParsedMessage msg = chatClient.prompt()

@@ -15,7 +15,7 @@ By leveraging Binance's free real-time WebSocket stream, TriggerX securely suppo
 ## ✨ Features
 
 - **Real-Time Market Data**: Direct Binance WebSocket integration streams miniTicker prices for highly efficient, free-of-cost price monitoring.
-- **Natural Language Processing**: Groq API integration (`llama-3.1-8b-instant` via Spring AI) allows the creation of alerts using conversational English (e.g., "Alert me when ETH drops below 2500" or "BTC up 10%").
+- **Natural Language Processing**: A deterministic parser resolves the common phrasings (`BTC above 80000`, `eth price`, `delete all`) with no network call; anything it is not confident about falls through to Google Gemini (`gemini-3.5-flash-lite` via Spring AI), so conversational English still works (e.g., "Alert me when ETH drops below 2500" or "BTC up 10%") without spending the free-tier budget on the easy cases.
 - **Percentage-Based Alerts**: NLP resolves relative targets from live prices automatically (e.g., "notify me if SOL falls 5%" derives the absolute target on the fly).
 - **Passwordless Authentication**: Secure OTP-over-email login issuing 30-day JWT sessions, with per-user token versioning that makes every issued token instantly revocable through a single `logout-all` call.
 - **Telegram Bot Integration**: Full webhook-free bot integration via direct linking. Receive instant alerts or interact directly with the bot to create, list, and delete alerts via natural language commands.
@@ -31,7 +31,7 @@ By leveraging Binance's free real-time WebSocket stream, TriggerX securely suppo
 | **Core** | Java 21, Spring Boot 3.3.x |
 | **Database** | PostgreSQL, Flyway (Migrations), Spring Data JPA |
 | **Security** | Custom JWT Filter, OTP Verification |
-| **Integrations** | Gmail SMTP, Telegram Bot API, Spring AI + Groq (`llama-3.1-8b-instant`) |
+| **Integrations** | Gmail SMTP, Telegram Bot API, Spring AI + Gemini (`gemini-3.5-flash-lite`) |
 | **Realtime** | `Java-WebSocket` for Binance Streaming |
 
 ---
@@ -86,13 +86,16 @@ The application will be accessible at `http://localhost:8080`.
 
 ### Natural Language Configuration
 
-To enable the AI parsing for the `/api/v1/alerts/natural` endpoint, provide a free Groq API key:
+To enable the AI parsing for the `/api/v1/alerts/natural` endpoint, provide a free Gemini API key from
+[aistudio.google.com/apikey](https://aistudio.google.com/apikey). The free tier needs no billing account
+and cannot bill you: requests past the quota return HTTP 429 rather than a charge. Note that Google
+uses free-tier content to improve its products; attach billing if that matters for your deployment.
 
 1. Create a file named `application-local.properties` (gitignored by default) in `src/main/resources`.
 2. Add your key:
 
 ```properties
-spring.ai.openai.api-key=your_groq_key_here
+spring.ai.openai.api-key=your_gemini_key_here
 ```
 
 Restart the server to apply the changes. Note: Without this key, the NLP endpoint returns an HTTP 503 response, while all other features continue to operate normally.
@@ -168,11 +171,11 @@ Complete overview of the available REST API endpoints:
 
 ## 🚢 Deployment Configuration
 
-TriggerX is deployed to **Azure App Service (`triggerx-api1`)** on the **B2 plan** (Canada Central), connected to an **Azure Database for PostgreSQL Flexible Server**. To build and push a new release:
+TriggerX is deployed to **Azure App Service (`triggerx-api1`)** on the **B2 plan** (South India), connected to an **Azure Database for PostgreSQL Flexible Server**. To build and push a new release:
 
 ```bash
 # Compile and package the artifact, skipping local unit checks
-./mvnw clean package -DskipTests
+mvn clean package -DskipTests
 
 # Deploy the JAR directly to the App Service
 az webapp deploy \
@@ -190,6 +193,7 @@ Application properties mandate these parameters supplied externally in productio
 - `MAIL_USERNAME`, `MAIL_PASSWORD` — Gmail SMTP credentials or App-Specific Password
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME` — Assigned from Telegram BotFather platform
 - `TELEGRAM_WEBHOOK_SECRET` — Shared secret echoed by Telegram in the `X-Telegram-Bot-Api-Secret-Token` header; the webhook rejects any call without it (required when the bot is enabled)
-- `SPRING_AI_OPENAI_API_KEY` — Groq API key for the NLP alert parsing endpoint
+- `GEMINI_API_KEY` : Gemini API key for the NLP alert parsing endpoint
+- `AI_BASE_URL`, `AI_MODEL` : optional overrides to point Spring AI at a different OpenAI-compatible provider
 
 *Note: Container orchestration routes health verifications via the pre-configured `/api/v1/health` and `/actuator/health` endpoint mappings bound inherently.*
