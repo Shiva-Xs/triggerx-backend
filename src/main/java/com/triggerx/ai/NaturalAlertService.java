@@ -138,7 +138,7 @@ public class NaturalAlertService {
             log.debug("Intent: {} for: {}", msg.intent(), text);
             return msg;
         } catch (Exception e) {
-            log.warn("Groq call failed: {}", e.getMessage());
+            log.warn("AI intent call failed: {}", e.getMessage());
             throw TriggerXException.aiUnavailable();
         }
     }
