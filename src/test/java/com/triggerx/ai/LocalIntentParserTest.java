@@ -15,6 +15,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
@@ -85,6 +86,36 @@ class LocalIntentParserTest {
         ParsedMessage down = parse("notify if eth falls 5%");
         assertEquals("PCT_ALERT", down.intent());
         assertEquals(0, new BigDecimal("-5").compareTo(down.percentTarget()));
+    }
+
+    @Test
+    void treatsTheSpelledOutWordPercentAsAPercentage() {
+        // Reported from the Telegram bot: "Eth above 0.1 percent from currrent price"
+        // was read as an absolute $0.1 target and fired immediately.
+        ParsedMessage m = parse("eth above 0.1 percent from currrent price");
+        assertEquals("PCT_ALERT", m.intent());
+        assertEquals("ETH", m.symbol());
+        assertEquals(0, new BigDecimal("0.1").compareTo(m.percentTarget()));
+
+        ParsedMessage two = parse("eth above 2 percent");
+        assertEquals("PCT_ALERT", two.intent());
+        assertEquals(0, new BigDecimal("2").compareTo(two.percentTarget()));
+
+        ParsedMessage down = parse("btc below 5 percent");
+        assertEquals("PCT_ALERT", down.intent());
+        assertEquals(0, new BigDecimal("-5").compareTo(down.percentTarget()));
+    }
+
+    @Test
+    void neverReadsAPercentageAsAnAbsolutePrice() {
+        for (String text : new String[]{
+                "eth above 0.1 percent from currrent price", "eth above 2 percent",
+                "btc up 3 pct", "sol down 4 percentage", "btc above 1.5%"}) {
+            ParsedMessage m = parser.parse(text).orElse(null);
+            if (m == null) continue;                    // deferring to the LLM is acceptable
+            assertEquals("PCT_ALERT", m.intent(), text);
+            assertNull(m.targetPrice(), "percentage must not become an absolute price: " + text);
+        }
     }
 
     @Test

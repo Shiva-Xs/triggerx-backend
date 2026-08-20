@@ -66,8 +66,14 @@ public class LocalIntentParser {
             "^(delete|remove|clear|cancel|drop)\\s+(all|everything)(\\s+(my\\s+)?alerts?)?$");
     private static final Pattern DELETE_N_RE = Pattern.compile(
             "^(delete|remove|cancel|drop)\\s+(alert\\s+)?#?(\\d{1,3})$");
-    private static final Pattern PCT_RE = Pattern.compile(
-            "\\b(up|rises?|gains?|down|drops?|falls?|loses?)\\b[^0-9%]{0,12}?([0-9]+(?:\\.[0-9]+)?)\\s*%");
+    /** A percentage was meant, whether written as a sign or spelled out. */
+    private static final Pattern PCT_MARKER = Pattern.compile("%|\\bpercent(age)?\\b|\\bpct\\b");
+    private static final Pattern PCT_VALUE = Pattern.compile(
+            "([0-9]+(?:\\.[0-9]+)?)\\s*(?:%|percent(?:age)?\\b|pct\\b)");
+    private static final Pattern PCT_DOWN = Pattern.compile(
+            "\\b(down|drops?|dips?|falls?|loses?|below|under|decreases?)\\b");
+    private static final Pattern PCT_UP = Pattern.compile(
+            "\\b(up|rises?|gains?|above|over|increases?|higher)\\b");
     private static final Pattern PRICE_RE = Pattern.compile(
             "^(what'?s?\\s+)?(the\\s+)?(current\\s+)?price\\s+(of|for)?\\s*([a-z]{2,10})\\??$"
           + "|^([a-z]{2,10})\\s+price\\??$");
@@ -106,16 +112,10 @@ public class LocalIntentParser {
         String symbol = soleSymbol(s);
         if (symbol == null) return Optional.empty();
 
-        // "btc up 10%": percentage move from current price.
-        Matcher pct = PCT_RE.matcher(s);
-        if (pct.find()) {
-            BigDecimal amount = new BigDecimal(pct.group(2));
-            boolean negative = pct.group(1).matches("down|drops?|falls?|loses?");
-            return Optional.of(new ParsedMessage(
-                    "PCT_ALERT", symbol, null, null, null,
-                    negative ? amount.negate() : amount));
-        }
-        if (s.contains("%")) return Optional.empty();   // some other % phrasing, so defer
+        // Any percentage phrasing is a move relative to the current price, never an
+        // absolute target. Handle every one of them here so none can fall through to
+        // the absolute-price branch below.
+        if (PCT_MARKER.matcher(s).find()) return percentAlert(s, symbol);
 
         BigDecimal target = soleNumber(s, symbol);
         if (target == null || target.signum() <= 0) {
@@ -128,6 +128,23 @@ public class LocalIntentParser {
         String condition = direction(s);
         String intent = condition == null ? "AMBIGUOUS" : "CREATE_ALERT";
         return Optional.of(new ParsedMessage(intent, symbol, condition, target, null, null));
+    }
+
+    /**
+     * Builds a PCT_ALERT, or defers when the phrasing is not a plain "SYM up N percent".
+     * Misreading a percentage as an absolute price produces an alert that is already met
+     * and fires the instant it is created, so anything less than unambiguous goes to the LLM.
+     */
+    private Optional<ParsedMessage> percentAlert(String s, String symbol) {
+        Matcher value = PCT_VALUE.matcher(s);
+        if (!value.find()) return Optional.empty();   // a marker with no number attached
+        BigDecimal amount = new BigDecimal(value.group(1));
+        if (value.find()) return Optional.empty();    // more than one percentage
+        boolean down = PCT_DOWN.matcher(s).find();
+        boolean up   = PCT_UP.matcher(s).find();
+        if (down == up) return Optional.empty();      // no direction, or a contradictory one
+        return Optional.of(new ParsedMessage(
+                "PCT_ALERT", symbol, null, null, null, down ? amount.negate() : amount));
     }
 
     /** BELOW is tested first so "drops below" is never mistaken for a CROSSES "to". */
