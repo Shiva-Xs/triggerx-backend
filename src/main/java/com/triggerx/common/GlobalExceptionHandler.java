@@ -1,6 +1,7 @@
 package com.triggerx.common;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -8,6 +9,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @Slf4j
 @RestControllerAdvice
@@ -53,6 +55,20 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest()
                 .body(new ApiResponse("INVALID_REQUEST",
                         "Invalid request body — check field types and enum values", null));
+    }
+
+    /**
+     * A path with no handler - /api/v1/symbols/nope, and every scanner probe under a
+     * permit-listed prefix - used to fall through to the catch-all below and answer 500 with a
+     * full stack trace in the log. A missing route is a 404, and saying so keeps genuine 500s
+     * meaningful.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse> handleNoResource(NoResourceFoundException ex) {
+        log.debug("No handler for {}", ex.getResourcePath());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .header("X-Robots-Tag", "noindex")
+                .body(new ApiResponse("NOT_FOUND", "No such resource", null));
     }
 
     @ExceptionHandler(Exception.class)
