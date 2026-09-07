@@ -16,6 +16,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +41,7 @@ class AuthServiceTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(authService, "otpRateLimitPerHour", 3);
+        ReflectionTestUtils.setField(authService, "otpRateLimitPerIpPerHour", 30);
         ReflectionTestUtils.setField(authService, "otpExpiryMinutes", 10);
         ReflectionTestUtils.setField(authService, "otpMaxAttempts", 5);
     }
@@ -50,7 +52,7 @@ class AuthServiceTest {
                 .thenReturn(3L);
 
         TriggerXException ex = assertThrows(TriggerXException.class, () -> 
-                authService.sendOtp("test@gmail.com"));
+                authService.sendOtp("test@gmail.com", "1.2.3.4"));
 
         assertEquals("RATE_LIMITED", ex.getErrorCode());
     }
@@ -72,5 +74,37 @@ class AuthServiceTest {
         assertEquals("INVALID_OTP", ex.getErrorCode());
         assertEquals(4, token.getAttempts(), "Attempts should be incremented");
         assertEquals(1, ex.getAttemptsRemaining(), "Should have 1 attempt remaining");
+    }
+
+    /**
+     * Per-address limiting alone let one host spray codes at unlimited addresses, sending all of
+     * that mail from our own account.
+     */
+    @Test
+    void sendOtp_blocksOneAddressSprayingManyEmails() {
+        ReflectionTestUtils.setField(authService, "otpRateLimitPerIpPerHour", 3);
+        when(otpTokenRepository.countByEmailSince(anyString(), any(LocalDateTime.class)))
+                .thenReturn(0L);
+
+        for (int i = 0; i < 3; i++) {
+            authService.sendOtp("victim" + i + "@gmail.com", "9.9.9.9");
+        }
+
+        TriggerXException ex = assertThrows(TriggerXException.class, () ->
+                authService.sendOtp("victim99@gmail.com", "9.9.9.9"));
+        assertEquals("RATE_LIMITED", ex.getErrorCode());
+    }
+
+    /** A different caller is unaffected by someone else's bucket. */
+    @Test
+    void sendOtp_perIpLimitDoesNotLeakAcrossCallers() {
+        ReflectionTestUtils.setField(authService, "otpRateLimitPerIpPerHour", 1);
+        when(otpTokenRepository.countByEmailSince(anyString(), any(LocalDateTime.class)))
+                .thenReturn(0L);
+
+        authService.sendOtp("a@gmail.com", "1.1.1.1");
+        assertThrows(TriggerXException.class, () -> authService.sendOtp("b@gmail.com", "1.1.1.1"));
+
+        authService.sendOtp("c@gmail.com", "2.2.2.2");
     }
 }

@@ -16,6 +16,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.UUID;
@@ -39,19 +43,54 @@ public class AuthService {
     @Value("${otp.rate.limit.per.hour:10}")
     private int otpRateLimitPerHour;
 
+    @Value("${otp.rate.limit.per.ip.per.hour:30}")
+    private int otpRateLimitPerIpPerHour;
+
+    /**
+     * Per-address limiting alone does not stop abuse: one host could ask for codes for thousands
+     * of different addresses and send that mail from our account, which is how a Gmail app
+     * password gets flagged. Kept in memory deliberately - this is a throttle, not an audit
+     * trail, and a restart losing it is cheaper than a schema migration on the hot path.
+     */
+    private final Map<String, Deque<Long>> otpHitsByIp = new ConcurrentHashMap<>();
+
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
+    /** Sliding one-hour window per address. Prunes as it goes, so no sweeper is needed. */
+    private boolean allowForIp(String clientIp) {
+        if (clientIp == null || clientIp.isBlank()) return true;
+        long cutoff = System.currentTimeMillis() - 3_600_000L;
+        Deque<Long> hits = otpHitsByIp.computeIfAbsent(clientIp, k -> new ArrayDeque<>());
+        synchronized (hits) {
+            while (!hits.isEmpty() && hits.peekFirst() < cutoff) hits.pollFirst();
+            if (hits.size() >= otpRateLimitPerIpPerHour) {
+                log.warn("OTP request rate limit hit for ip={}", clientIp);
+                return false;
+            }
+            hits.addLast(System.currentTimeMillis());
+        }
+        if (otpHitsByIp.size() > 10_000) {
+            otpHitsByIp.entrySet().removeIf(e -> {
+                synchronized (e.getValue()) { return e.getValue().isEmpty(); }
+            });
+        }
+        return true;
+    }
 
     public int getOtpExpirySeconds() {
         return otpExpiryMinutes * 60;
     }
 
     @Transactional
-    public void sendOtp(String rawEmail) {
+    public void sendOtp(String rawEmail, String clientIp) {
         String email = rawEmail.toLowerCase().trim();
         LocalDateTime oneHourAgo = LocalDateTime.now().minusHours(1);
         long recentCount = otpTokenRepository.countByEmailSince(email, oneHourAgo);
 
         if (recentCount >= otpRateLimitPerHour) {
+            throw TriggerXException.rateLimited(3600L);
+        }
+        if (!allowForIp(clientIp)) {
             throw TriggerXException.rateLimited(3600L);
         }
 

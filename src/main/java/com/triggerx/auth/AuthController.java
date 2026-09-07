@@ -1,5 +1,7 @@
 package com.triggerx.auth;
 
+import com.triggerx.common.ClientIp;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -21,9 +23,10 @@ public class AuthController {
 
     @PostMapping("/otp/send")
     public ResponseEntity<Map<String, Object>> sendOtp(
-            @Valid @RequestBody AuthRequest.OtpSend request
+            @Valid @RequestBody AuthRequest.OtpSend request,
+            HttpServletRequest httpRequest
     ) {
-        authService.sendOtp(request.email());
+        authService.sendOtp(request.email(), ClientIp.resolve(httpRequest));
         return ResponseEntity.ok(Map.of(
                 "message", "OTP sent",
                 "expiresInSeconds", authService.getOtpExpirySeconds()

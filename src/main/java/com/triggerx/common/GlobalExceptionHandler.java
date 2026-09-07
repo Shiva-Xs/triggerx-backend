@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -69,6 +70,15 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .header("X-Robots-Tag", "noindex")
                 .body(new ApiResponse("NOT_FOUND", "No such resource", null));
+    }
+
+    /** Scanners POST to GET-only routes constantly. 405 is the answer; it is not an incident. */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse> handleMethodNotSupported(HttpRequestMethodNotSupportedException ex) {
+        log.debug("Method {} not supported", ex.getMethod());
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .header("X-Robots-Tag", "noindex")
+                .body(new ApiResponse("METHOD_NOT_ALLOWED", "That method is not supported on this path", null));
     }
 
     @ExceptionHandler(Exception.class)
